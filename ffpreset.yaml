@@ -1,0 +1,345 @@
+presets:
+  # audio only
+  audio_only_wav:
+    description: 'Container: WAV  | Audio: wav'
+    format: wav
+    append: ''
+    audio_args: -c:a pcm_s16le -ac 2
+    video_args: -vn
+
+  audio_only_flac:
+    description: 'Container: FLAC | Audio: flac'
+    format: flac
+    append: ''
+    args: -vn -c:a flac -compression_level 5 -ac 2
+
+  audio_only_mp3_192:
+    description: 'Container: MP3  | Audio: mp3 - 192k'
+    format: mp3
+    append: ''
+    video_args: -vn 
+    audio_args: -ar 44100 -ac 2 -b:a 192k 
+
+  # ffv1 archive
+  ffv1_archive:
+    description: 'Container: MKV  | Video: ffv1 | Audio: flac | Filter: none'
+    format: mkv
+    append: __ffv1
+    args: -c:v ffv1 -level 3 -coder 1 -context 1 -slices 12 -g 1 -slicecrc 1 -c:a
+      flac
+
+  ffv1_archive_l_to_r:
+    description: 'Container: MKV  | Video: ffv1 | Audio: flac | Filter: copy left audio to right channel'
+    format: mkv
+    append: __ffv1
+    args: -c:v ffv1 -level 3 -coder 1 -context 1 -slices 12 -g 1 -slicecrc 1 -c:a
+      flac -af "pan=stereo|FL=FL|FR=FL"'
+
+  vcopy__aflac_l_to_r:
+    description: 'Container: MKV  | Video: copy | Audio: flac | Filter: copy left audio to right channel'
+    format: mkv
+    append: __afix
+    args: -c:v copy -c:a flac -af 'pan=stereo|FL=FL|FR=FL'
+
+
+  # utility
+  video_md5:
+    description: Generate video MD5
+    format: ''
+    append: ''
+    args: -hide_banner -loglevel error -map 0:v -f md5
+
+  rotate_mp4_180:
+    description: Rotate a mp4 video 180 degrees without reencoding
+    format: 'mp4'
+    append: '__rotated_180'
+    args: -c copy -metadata:s:v:0 rotate=180
+
+
+  # h.264 (Web Ready)
+  web_mp4_28:
+    description: 'Container: MP4  | Video: h.264 (main/28/4:2:0) | Audio: AAC 128kb
+      44.1K | Web Ready'
+    format: mp4
+    append: ''
+    args: -c:v libx264 -preset veryfast -profile:v main -crf 28 -pix_fmt yuv420p -c:a
+      aac -b:a 128K -ar 44.1K -movflags +faststart
+
+  web_mp4_26:
+    description: 'Container: MP4  | Video: h.264 (main/26/4:2:0) | Audio: AAC 128kb 44.1K | Web Ready'
+    format: mp4
+    append: ''
+    video_args: -c:v libx264 -preset veryfast -profile:v main -crf 26 -pix_fmt yuv420p -movflags +faststart
+    audio_args: -c:a aac -b:a 128K -ar 44.1K 
+
+  # h.264 (Down Scale to 1920x1080 / Web Ready)
+  web_mp4_28_ds_1080_aac:
+    description: 'Container: MP4  | Video: h.264 1920x1080 (main/28/4:2:0) | Audio:
+      AAC 128kb 44.1K | Web Ready'
+    format: mp4
+    append: ''
+    args: -c:v libx264 -preset veryfast -profile:v main -crf 28 -pix_fmt yuv420p -vf
+      "scale=1920:1080" -c:a aac -b:a 128K -ar 44.1K -movflags +faststart
+
+  web_mp4_26_ds_1080_aac:
+    description: 'Container: MP4  | Video: h.264 1920x1080 (main/26/4:2:0) | Audio:
+      AAC 128kb 44.1K | Web Ready'
+    format: mp4
+    append: ''
+    args: -c:v libx264 -preset veryfast -profile:v main -crf 26 -pix_fmt yuv420p -vf
+      "scale=1920:1080" -c:a aac -b:a 128K -ar 44.1K -movflags +faststart
+
+  web_mp4_28_ds_1080_acopy:
+    description: 'Container: MP4  | Video: h.264 1920x1080 (main/28/4:2:0) | Audio:
+      None | Web Ready'
+    format: mp4
+    append: ''
+    args: -c:v libx264 -preset veryfast -profile:v main -crf 28 -pix_fmt yuv420p -vf
+      "scale=1920:1080" -movflags +faststart
+
+  web_mp4_26_ds_1080_acopy:
+    description: 'Container: MP4  | Video: h.264 1920x1080 (main/26/4:2:0) | Audio:
+      None | Web Ready'
+    format: mp4
+    append: ''
+    args: -c:v libx264 -preset veryfast -profile:v main -crf 26 -pix_fmt yuv420p -vf
+      "scale=1920:1080" -movflags +faststart
+
+
+  # h.264 (For Archive)
+  archive_h264_20:
+    description: 'Container: MOV  | Video: h.264 (high/20/4:2:0) | Audio: PCM 16 bit
+      / 48k'
+    format: mov
+    append: ''
+    args: -c:v libx264 -preset superfast -profile:v high -level:v 5.0 -crf 20 -pix_fmt
+      yuv420p -r 30000/1001 -c:a pcm_s16le -ar 48K
+
+  archive_h264_14:
+    description: 'Container: MOV  | Video: h.264 (high/14/4:2:0) | Audio: PCM 16 bit 
+      / 48k'
+    format: mov
+    append: ''
+    video_args: -c:v libx264 -preset superfast -profile:v high -level:v 5.0 -crf 14 -pix_fmt yuv420p
+    audio_args: -c:a pcm_s16le -ar 48K
+
+  archive_h264_14_deint:
+    description: 'Container: MOV  | Video: h.264 (high/14/4:2:0) | Audio: PCM 16 bit 
+      / 48k | Filter: Deinterlace'
+    format: mov
+    append: ''
+    video_args: -c:v libx264 -filter:v "yadif=1" -preset superfast -profile:v high -level:v 5.0 -crf 
+      14 -pix_fmt yuv420p
+    audio_args: -c:a pcm_s16le -ar 48K
+    args: -c:v libx264 -filter:v "yadif=1" -preset superfast -profile:v high -level:v 5.0 -crf 
+      14 -pix_fmt yuv420p -c:a pcm_s16le -ar 48K
+
+
+  # h.264 (high)
+  h264_high_14_420:
+    description: 'Container: MOV  | Video: h.264 (high/14/4:2:0) | Audio: copy'
+    format: mov
+    append: ''
+    args: -c:v libx264 -preset superfast -profile:v high -level:v 5.0 -crf 14 -pix_fmt
+      yuv420p -r 30000/1001 -c:a copy
+
+  h264_high_14_422:
+    description: 'Container: MOV  | Video: h.264 (high/14/4:2:2) | Audio: copy'
+    format: mov
+    append: ''
+    args: -c:v libx264 -preset superfast -profile:v high422 -level:v 5.0 -crf 14 -pix_fmt
+      yuv422p10le -r 30000/1001 -c:a copy
+
+  h264_high_14_420_deint:
+    description: 'Container: MOV  | Video: h.264 (high/14/4:2:0) | Audio: copy | Filter:
+      Deinterlace'
+    format: mov
+    append: ''
+    args: -vf yadif -c:v libx264 -preset superfast -profile:v high -level:v 5.0 -crf
+      14 -pix_fmt yuv420p -r 30000/1001 -c:a copy
+
+  h264_high_14_422_deint:
+    description: 'Container: MOV  | Video: h.264 (high/14/4:2:2) | Audio: copy | Filter:
+      Deinterlace'
+    format: mov
+    append: ''
+    args: -vf yadif -c:v libx264 -preset superfast -profile:v high422 -level:v 5.0
+      -crf 14 -pix_fmt yuv422p10le -r 30000/1001 -c:a copy
+
+
+  # h.264 (high / Canon DSLR)
+  h264_high_canon_1:
+    description: 'Container: MOV  | Video: h.264 (high/14/4:2:0) | Audio: copy | Filter:
+      CineStyle LUT'
+    format: mov
+    append: ''
+    args: -filter_complex "lut3d=file='D\:/Videos/Color Lookup Tables/CineStyle LUT/S-curve_for_CineStyle.cube'"
+      -c:v libx264 -preset superfast -profile:v high -level:v 5.0 -crf 14 -pix_fmt
+      yuv420p -r 30000/1001 -c:a copy
+
+  h264_high_canon_2:
+    description: 'Container: MOV  | Video: h.264 (high/14/4:2:2) | Audio: copy | Filter:
+      CineStyle LUT'
+    format: mov
+    append: ''
+    args: -filter_complex "lut3d=file='D\:/Videos/Color Lookup Tables/CineStyle LUT/S-curve_for_CineStyle.cube'"
+      -c:v libx264 -preset superfast -profile:v high422 -level:v 5.0 -crf 14 -pix_fmt
+      yuv422p10le -r 30000/1001 -c:a copy
+
+
+  # h.265 (main / iPhone  7)
+  h265_main_iphone7_acopy_24fps:
+    description: 'Container: MOV  | Video: h.265 24 FPS (main/10/4:2:0) | Audio: copy'
+    format: mov
+    append: ''
+    args: -c:v libx265 -preset veryfast -profile main -level 6.1 -crf 10 -pix_fmt
+      yuv420p -r 24 -c:a copy
+
+  h265_main_iphone7_acopy_30fps:
+    description: 'Container: MOV  | Video: h.265 30 FPS (main/10/4:2:0) | Audio: copy'
+    format: mov
+    append: ''
+    args: -c:v libx265 -preset veryfast -profile main -level 6.1 -crf 10 -pix_fmt
+      yuv420p -r 30 -c:a copy
+
+  h265_main_iphone7_acopy_60fps:
+    description: 'Container: MOV  | Video: h.265 60 FPS (main/10/4:2:0) | Audio: copy'
+    format: mov
+    append: ''
+    args: -c:v libx265 -preset veryfast -profile main -level 6.1 -crf 10 -pix_fmt
+      yuv420p -r 60 -c:a copy
+
+
+  # h.265
+  h265_23_acopy:
+    description: 'Container: MKV  | Video: h.265 | Audio: copy'
+    format: mkv
+    append: ''
+    args: -map 0 -c:v libx265 -preset fast -profile main -crf 23 -pix_fmt yuv420p
+      -c:a copy  -c:s copy
+
+
+  # ProRes
+  prores_acopy:
+    description: 'Container: MOV  | Video: ProRes 4:2:2 (std) | Audio: Copy'
+    format: mov
+    append: ''
+    args: -c:v prores_ks -profile:v standard -pix_fmt yuv422p10le -vendor ap10 -bits_per_mb
+      8192 -qscale 1 -c:a copy
+
+  prores_acopy_deint:
+    description: 'Container: MOV  | Video: ProRes 4:2:2 (std) | Audio: Copy | Filter:
+      Deinterlace'
+    format: mov
+    append: ''
+    args: -c:v prores_ks -profile:v standard -pix_fmt yuv422p10le -vf yadif -vendor
+      ap10 -bits_per_mb 8192 -qscale 1 -c:a copy
+
+  prores_pcm16:
+    description: 'Container: MOV  | Video: ProRes 4:2:2 (std) | Audio: PCM 16 bit /
+      48k'
+    format: mov
+    append: ''
+    args: -c:v prores_ks -profile:v standard -pix_fmt yuv422p10le -vendor ap10 -bits_per_mb
+      8192 -qscale 1 -c:a pcm_s16le -ar 48K
+
+  prores_pcm16_deint:
+    description: 'Container: MOV  | Video: ProRes 4:2:2 (std) | Audio: PCM 16 bit /
+      48k | Filter: Deinterlace'
+    format: mov
+    append: ''
+    args: -c:v prores_ks -profile:v standard -pix_fmt yuv422p10le -vf yadif -vendor
+      ap10 -bits_per_mb 8192 -qscale 1 -c:a pcm_s16le -ar 48K
+
+
+  # ProRes (Canon DSLR)
+  prores_canon_1:
+    description: 'Container: MOV  | Video: ProRes 4:2:2 (std) | Audio: Copy | Filter:
+      CineStyle LUT'
+    format: mov
+    append: ''
+    args: -filter_complex "lut3d=file='D\:/Videos/Color Lookup Tables/CineStyle LUT/S-curve_for_CineStyle.cube"
+      -c:v prores_ks -profile:v standard -pix_fmt yuv422p10le -vendor ap10 -bits_per_mb
+      8192 -qscale 1 -c:a copy
+
+  prores_canon_2:
+    description: 'Container: MOV  | Video: ProRes 4:2:2 (std) | Audio: PCM 16 bit /
+      48k | Filter: CineStyle LUT'
+    format: mov
+    append: ''
+    args: -filter_complex "lut3d=file='D\:/Videos/Color Lookup Tables/CineStyle LUT/S-curve_for_CineStyle.cube"
+      -c:v prores_ks -profile:v standard -pix_fmt yuv422p10le -vendor ap10 -bits_per_mb
+      8192 -qscale 1 -c:a pcm_s16le -ar 48K
+
+
+  # Container Conversion
+  container_to_ts:
+    description: 'Container: TS   | Video: Copy | Audio: Copy'
+    format: ts
+    append: ''
+    args: -c:v copy -c:a copy
+
+  container_to_mkv:
+    description: 'Container: MKV  | Video: Copy | Audio: Copy'
+    format: mkv
+    append: ''
+    args: -c:v copy -c:a copy
+
+  container_to_mp4:
+    description: 'Container: MP4  | Video: Copy | Audio: Copy'
+    format: mp4
+    append: ''
+    args: -c:v copy -c:a copy
+
+  container_to_m2ts:
+    description: 'Container: M2TS | Video: Copy | Audio: Copy'
+    format: m2ts
+    append: ''
+    args: -c:v copy -c:a copy
+
+
+  # Deinterlacing
+  deinterlace_1:
+    description: 'Container: MOV  | Video: h.264 (high/26/4:2:0) | Audio: PCM 16 bit
+      / 48k | Filter: nnedi'
+    format: mov
+    append: ''
+    args: -filter_complex "[0:0]nnedi=weights='D\:\\Videos\\Capture\\SDI\\nnedi3_weights.bin'[out]"
+      -map [out] -map_chapters -1 -map_metadata -1 -r:v 30000/1001 -vsync vfr -field_order
+      progressive -c:v libx264 -preset superfast -profile:v high -level:v 5.0 -crf
+      26 -pix_fmt yuv420p -c:a pcm_s16le -ar 48K
+
+  deinterlace_2:
+    description: 'Container: MOV  | Video: h.264 (high/14/4:2:0) | Audio: PCM 16 bit
+      / 48k | Filter: Deinterlace'
+    format: mov
+    append: ''
+    args: -vf yadif=1 -c:v libx264 -preset superfast -profile:v high -level:v 5.0
+      -crf 14 -pix_fmt yuv420p -c:a pcm_s16le -ar 48K
+
+  deinterlace_3:
+    description: 'Container: MOV  | Video: h.264 (high/26/4:2:0) | Audio: PCM 16 bit
+      / 48k | Filter: Deinterlace'
+    format: mov
+    append: ''
+    args: -vf yadif=1 -c:v libx264 -preset superfast -profile:v high -level:v 5.0
+      -crf 26 -pix_fmt yuv420p -c:a pcm_s16le -ar 48K
+
+  deinterlace_4:
+    description: 'Container: MOV  | Video: h.264 (high/26/4:2:0) | Audio: PCM 16 bit
+      / 48k | Filter: Deinterlace, contrast, NR, sharp'
+    format: mov
+    append: ''
+    args: -vf yadif=1,curves=linear_contrast,hqdn3d=4,unsharp=5:5:2 -c:v libx264 -preset
+      superfast -profile:v high -level:v 5.0 -crf 26 -pix_fmt yuv420p -c:a pcm_s16le
+      -ar 48K
+
+  deinterlace_5:
+    description: 'Container: MOV  | Video: h.264 (high/14/4:2:0) | Audio: PCM 16 bit
+      / 48k | Filter: Deinterlace, contrast, NR, sharp'
+    format: mov
+    append: ''
+    args: -vf yadif=1,curves=linear_contrast,hqdn3d=4,unsharp=5:5:2 -c:v libx264 -preset
+      superfast -profile:v high -level:v 5.0 -crf 14 -pix_fmt yuv420p -c:a pcm_s16le
+      -ar 48K
+

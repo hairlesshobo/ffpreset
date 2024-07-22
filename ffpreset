@@ -1,0 +1,597 @@
+#!/usr/bin/env python3
+
+import argparse
+import json
+import math
+import os
+import subprocess
+import sys
+import yaml
+from pathlib import Path
+from queue import Queue, Empty
+from threading import Thread
+
+
+SCRIPT_DIR = Path(__file__).parent.resolve()
+NORMALIZE_TARGET_LOUDNESS = "-13"
+NORMALIZE_MAX_TRUE_PEAK = "-1.0"
+VIDEO_FILE_TYPES = ["mp4", "mov", "m2ts", "mkv", "ts", "dv", "avi", "m2t", "mts"]
+FILE_NAME_WIDTH = 1
+NORMALIZE_WIDTH_PAD = 20
+WIDTH_PAD = 0
+
+
+def parse_args():
+  parser = argparse.ArgumentParser(
+                    prog='ffpreset',
+                    description='Wrapper for ffmpeg that allows to easily run the program using presets',
+                    epilog=f"Run `{os.path.basename(sys.argv[0])} -l` to list available presets ")
+  
+  parser.add_argument('preset', help='The name of the preset to use')
+  parser.add_argument('source_file', help='The full or relative path to the source file to use for encoding', nargs='+')
+
+  parser.add_argument('-a', '--append', help='Append text to the filename, this overrides whatever is configured in the presets file', action='store')
+  parser.add_argument('-b', '--batch', help='The specified source is a directory, process all files in it.', action='store_true')
+  parser.add_argument('-c', '--concat', help='Concat all provided files', action='store_true')
+  parser.add_argument('--debug', help='Output more logs for debugging', action='store_true')
+  parser.add_argument('--dry_run', help='No action is taken, but the action that WOULD be taken is logged', action='store_true')
+  parser.add_argument('-f', '--filename', help='Name to use for the output file. Cannot be used in batch mode', action='store')
+  parser.add_argument('-l', '--list', help='List available presets', action='store_true')
+  parser.add_argument('-n', '--normalize', help='Normalize the audio automatically', action='store_true')
+  parser.add_argument('-o', '--output_dir', help='Specify a directory to write the output file to', action='store')
+  parser.add_argument('-q', '--quiet', help='Reduce output noise', action='count', default=0)
+  parser.add_argument('-s', '--skip_existing', help='Skip any files that already exist', action='store_true')
+
+
+  if '-l' in sys.argv or '--list' in sys.argv:
+    list_presets()
+    exit(0)
+
+  args = parser.parse_args()
+
+  ## verify parameter compatibility
+  if args.filename is not None:
+    if len(args.source_file) > 1 and args.concat == False:
+      print("ERROR: Cannot specify --filename with multiple input files unless the files are being concatenated")
+      exit(1)
+
+    if args.batch == True:
+      print("ERROR: Cannot specify --filename when operating in batch mode")
+      exit(1)
+
+  if args.batch == True and args.concat == True:
+    print("ERROR: Cannot specify --batch and --concat at the same time")
+    exit(1)
+
+  if args.filename is None and args.concat == True:
+    print("ERROR: You must specify --filename when using --concat")
+    exit(1)
+
+  return args
+
+def main():
+  global FILE_NAME_WIDTH, WIDTH_PAD
+
+  try:
+    args = parse_args()
+
+    if args.debug == True:
+      print(args)
+
+
+    # we add a padding if we are going to be producing temporary files while normalizing
+    if args.normalize == True and args.concat == True:
+      WIDTH_PAD = NORMALIZE_WIDTH_PAD
+
+    requested_preset = args.preset
+    source_files = args.source_file
+
+
+    # verify source file(s) exist
+    for source_file in source_files:
+      if not os.path.exists(source_file):
+        print(f"Specified source file does not exist: {source_file}")
+        exit(1)
+
+
+    # load requested preset
+    config = load_config()
+    presets = config["presets"]
+
+    if requested_preset not in presets.keys():
+      print(f"ERROR: Failed to find preset named '{requested_preset}'")
+      exit(1)
+
+    preset = presets[requested_preset]
+
+    if args.filename is not None:
+      if not str(args.filename).endswith(preset["format"]):
+        print(f"ERROR: Preset outputs to format '{preset['format']}', the output filename you provide must end with this")
+        exit(1)
+
+    
+    # determine append string to use, if any
+    append_str = ""
+
+    if preset["append"] is not None:
+      append_str = preset["append"]
+    if args.append is not None:
+      append_str = args.append
+
+    
+    if args.quiet < 2:
+      print(f"   Selected Preset: {requested_preset}")
+      print(f"Preset Description: {preset['description']}")
+      print(f"  Preset arguments: {preset['video_args']} {preset['audio_args']}")
+      print(f"     Output format: {preset['format']}")
+      print(f"   Normalize Audio: {args.normalize}")
+      print()
+
+
+    # not concating files, batch mode
+    if args.concat == False:
+
+      if args.batch == True and os.path.isdir(source_files[0]):
+        source_files = []
+
+        for entry in os.scandir(args.source_file[0]):
+          if entry.name.startswith('._'):
+            continue
+          
+          source_files.append(Path(entry.path).resolve())
+
+        source_files = sorted(source_files)
+
+      if args.filename is not None:
+          FILE_NAME_WIDTH = len(Path(args.filename).name)
+      else:
+        for source_file in source_files:
+          width = len(Path(source_file).name)
+
+          if width > FILE_NAME_WIDTH:
+            FILE_NAME_WIDTH = width
+
+      for source_file in source_files:
+        destination_dir = determine_dest_dir(args, source_file)
+        output_file_path = generate_output_file_name(args, preset, source_file, destination_dir, append_str)
+
+        if args.skip_existing == True and os.path.exists(output_file_path):
+          output_file_name = Path(output_file_path).name
+          print(f"[{pad_string(output_file_name)}] Skipping existing file")
+          continue
+
+        run_ffmpeg(args, f"{preset['video_args']} {preset['audio_args']}", source_file, output_file_path, normalize=args.normalize)
+
+    # running in concat mode
+    else:
+      concat_files(args, preset, source_files)
+
+  except KeyboardInterrupt:
+    print()
+    print("Cancelled by user")
+    exit(1)
+    
+
+def concat_files(args, preset, source_files):
+  output_path = Path(args.filename).resolve()
+  tmpfile_path = f"{output_path}.ffpreset_concat_list"
+  output_file_dir = Path(output_path).parent
+  output_file_basename = Path(output_path).stem
+  total_duration = 0
+
+  source_file_list = []
+
+  if args.normalize == True:
+    if args.quiet < 1:
+      print("Beginning to encode concat temp files")
+
+    clip_num = 1
+    for source_file in source_files:
+        tmp_file_name = "{}__ffpreset_clip_{:04.0f}.{}".format(output_file_basename, clip_num, "mkv")
+        tmp_file_path = os.path.join(output_file_dir, tmp_file_name)
+        source_file_list.append(tmp_file_path)
+
+        # encode temp file
+        audio_args = preset["audio_args"]
+        video_args = "-c:v copy"
+        ffmpeg_args = " ".join([video_args, audio_args])
+        run_ffmpeg(args, ffmpeg_args, source_file, tmp_file_path, normalize=True)
+      
+        clip_num += 1
+
+    if args.quiet < 1:
+      print("Done encoding concat temp files")
+      print()
+
+  else:
+    for source_file in source_files:
+      source_file_list.append(Path(source_file).resolve())
+
+
+
+  if args.dry_run == False:
+    with open(tmpfile_path, mode="w", encoding="utf-8") as tmpfile:
+      for tmp_source_file in source_file_list:
+        tmpfile.write(f"file '{tmp_source_file}'\n")
+
+        media_file_detail = ffprobe_file(tmp_source_file)
+        total_duration += float(media_file_detail["format"]["duration"])
+
+  total_duration_ms = int(total_duration * 1000 * 1000)
+
+  if args.quiet < 1:
+    print("Concatenating files into output file")
+
+  if args.normalize == True:
+    audio_args = "-c:a copy"
+    video_args = preset["video_args"]
+  else:
+    audio_args = preset["audio_args"]
+    video_args = preset["video_args"]
+  ffmpeg_args = " ".join([video_args, audio_args])
+  run_ffmpeg(args, ffmpeg_args, tmpfile_path, output_path, concat=True, total_duration_ms=total_duration_ms)
+  
+  if args.quiet < 1:
+    print("Done concatenating files into output file")
+    print()
+
+  if args.quiet < 1:
+    print("cleaning up")
+  
+  if args.dry_run == False:
+    os.remove(tmpfile_path)
+    if args.normalize == True:
+      for tmp_source_file in source_file_list:
+        name = Path(tmp_source_file).name
+        print(f"[{name}] Removing temporary file")
+        os.remove(tmp_source_file)
+
+
+def determine_dest_dir(args, source_file):
+  if args.output_dir is not None:
+    destination_dir = args.output_dir
+  else:
+    destination_dir = os.path.dirname(source_file)
+
+    if destination_dir == "":
+      destination_dir = os.getcwd()
+
+  destination_dir = Path(destination_dir).resolve()
+
+  return destination_dir
+
+
+def generate_output_file_name(args, preset, source_file, destination_dir, append_str):
+  # special handling for operations with no output file (md5 generation, etc)
+  if preset["format"] == "":
+    target_path = "-"
+  else:
+    file_base_name = Path(source_file).stem
+
+    if args.filename is not None:
+      # a filename with a directory was provided, resolve it
+      if '/' in args.filename:
+        target_path = Path(args.filename).resolve()
+
+      # no directory was specified in file name, so we use the provided destination_dir
+      else:
+        target_path = f"{destination_dir}/{args.filename}"
+
+    # no filename was provided, so we generate one
+    else:
+      target_path = f"{destination_dir}/{file_base_name}{append_str}.{preset['format']}"
+
+  return target_path
+
+
+def run_ffmpeg(args, ffmpeg_args, source_file, output_file, concat=False, total_duration_ms=0, normalize=False):
+  # make sure the target directory is actually a directory, or create it if it doesn't exist
+  output_dir = Path(output_file).parent
+  output_file_name = Path(output_file).name
+
+  if not os.path.exists(output_dir):
+    # create the output directory, but only if it doesn't eixst
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+  else:
+    if not os.path.isdir(output_dir):
+      print(f"Specified output directory exists as something other than a directory: {output_dir}")
+      exit(1)
+
+  if args.debug == True:
+    print("-----------------------------------------------------------------------------------------------------------")
+    print(f"        Input path: {source_file}")
+    print(f"       Output path: {output_file}")
+  
+
+  ffmpeg_args = [ffmpeg_args]
+
+  if total_duration_ms == 0:
+    media_file_detail = ffprobe_file(source_file)
+    total_duration_ms = int(float(media_file_detail["format"]["duration"]) * 1000.0 * 1000.0)
+
+  ## audio normalize pass 1
+  if normalize == True:
+    ffmpeg_args.append(normalize_pass_1(args, output_file_name, source_file, total_duration_ms))
+
+  pre_input_args = ""
+
+  if concat == True:
+    pre_input_args = "-f concat -safe 0"
+
+  ffmpeg_args.append("-y -progress -")
+  ffmpeg_command = f"ffmpeg {pre_input_args} -i '{source_file}' {' '.join(ffmpeg_args)} '{output_file}'"
+
+  if args.debug == True:
+    print(f"    ffmpeg command: {ffmpeg_command}")
+    print()
+
+  if args.dry_run == True:
+    print(f"[{pad_string(output_file_name)}] Would encode this file")
+  else:
+    process = subprocess.Popen(ffmpeg_command,
+                              shell=True,
+                              stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE,
+                              encoding='UTF-8')
+    
+    stdout_queue = Queue()
+    stdout_thread = Thread(target=enqueue_output, args=(process.stdout, stdout_queue, process))
+    stdout_thread.daemon = True # thread dies with the program
+    stdout_thread.start()
+
+    stderr_queue = Queue()
+    stderr_thread = Thread(target=enqueue_output, args=(process.stderr, stderr_queue, process))
+    stderr_thread.daemon = True # thread dies with the program
+    stderr_thread.start()
+    
+    printed_progress = False
+    stderr_lines = []
+    current_progress = {
+      "size": 0,
+      "time_ms": 0,
+      "percentage": 0,
+      "speed": 0.0
+    }
+    while 1:
+      stdout_line = ''
+      stderr_line = ''
+
+      try:  stdout_line = stdout_queue.get_nowait() # or q.get(timeout=.1)
+      except Empty:
+        pass
+      else: # got line
+        if stdout_line is not None and len(stdout_line) != 0:
+          r = parse_ffmpeg_status('Encoding', output_file_name, stdout_line.rstrip("\n"), total_duration_ms, current_progress)
+
+          if r == True and printed_progress == False:
+            printed_progress = True
+
+      try:  stderr_line = stderr_queue.get_nowait() # or q.get(timeout=.1)
+      except Empty:
+        pass
+      else: # got line
+        if stderr_line is not None and len(stderr_line) != 0:
+          stderr_lines.append(stderr_line.rstrip("\n"))
+
+      # process exited and the queues are empty
+      if process.poll() != None and len(stderr_line) == 0 and len(stdout_line) == 0:
+        # stdout_thread.join()
+        # stderr_thread.join()
+        break
+
+    ffmpeg_return_code = process.returncode
+    if args.debug == True:
+      print('ffmpeg return code:', ffmpeg_return_code)
+
+    if ffmpeg_return_code != 0:
+      print("Error occurred when calling ffmpeg:")
+      print("---------------------------------------------------------------")
+
+      for error_line in stderr_lines:
+        print(f"!!!    {error_line}")
+      
+      print("---------------------------------------------------------------")
+      exit(1)
+    
+    # ffmpeg ran so fast, it didn't generate any output status to display, so we fake it
+    if printed_progress == False or current_progress["percentage"] < 100.0:
+      current_progress = {
+        "size": os.path.getsize(output_file),
+        "time_ms": 0,
+        "percentage": 100.0,
+        "speed": math.inf
+      }
+
+      print_progress('Encoding', output_file_name, current_progress, end=True)
+
+
+def print_progress(verb, output_file_name, progress, end, nosize=False):
+  print("\r", end='')
+  print("[{}] ".format(pad_string(output_file_name)), end='')
+  print("{}: {:6.1f}% complete, ".format(verb, progress["percentage"]), end='')
+  if nosize == False:
+    print("size: {:>10}, ".format(sizeof_fmt(progress["size"])), end='')
+  print("speed: {:5.1f}x".format(progress["speed"]), end='')
+
+  if end == True:
+    print("  ... done!")
+
+
+def normalize_pass_1(args, output_file_name, source_file, total_duration_ms):
+  if args.dry_run == True:
+    print(f"[{pad_string(output_file_name)}] Would normalize analyze this file")
+    return ""
+  else:
+    print(f"[{pad_string(output_file_name)}] Performing normalize 1st pass... ")
+    normalize_command = f"ffmpeg -i '{source_file}' -vn -filter:a loudnorm=print_format=json -progress - -f null /dev/null"
+    
+    process = subprocess.Popen(normalize_command,
+                              shell=True,
+                              stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE,
+                              encoding='UTF-8')
+    
+    stdout_queue = Queue()
+    stdout_thread = Thread(target=enqueue_output, args=(process.stdout, stdout_queue, process))
+    stdout_thread.daemon = True # thread dies with the program
+    stdout_thread.start()
+
+    stderr_queue = Queue()
+    stderr_thread = Thread(target=enqueue_output, args=(process.stderr, stderr_queue, process))
+    stderr_thread.daemon = True # thread dies with the program
+    stderr_thread.start()
+    
+    printed_progress = False
+    stderr_lines = []
+    current_progress = {
+      "size": 0,
+      "time_ms": 0,
+      "percentage": 0,
+      "speed": 0.0
+    }
+    while 1:
+      stdout_line = ''
+      stderr_line = ''
+      
+      try:  stdout_line = stdout_queue.get_nowait() # or q.get(timeout=.1)
+      except Empty:
+        pass
+      else: # got line
+        if stdout_line is not None and len(stdout_line) != 0:
+          r = parse_ffmpeg_status('Analyzing', output_file_name, stdout_line.rstrip("\n"), total_duration_ms, current_progress, nosize=True)
+
+          if r == True and printed_progress == False:
+            printed_progress = True
+
+      try:  stderr_line = stderr_queue.get_nowait() # or q.get(timeout=.1)
+      except Empty:
+        pass
+      else: # got line
+        if stderr_line is not None and len(stderr_line) != 0:
+          stderr_lines.append(stderr_line.rstrip("\n"))
+
+      # process exited and the queues are empty
+      if process.poll() != None and len(stderr_line) == 0 and len(stdout_line) == 0:
+        # stdout_thread.join()
+        # stderr_thread.join()
+        break
+
+    ffmpeg_return_code = process.returncode
+    if args.debug == True:
+      print('ffmpeg return code:', ffmpeg_return_code)
+
+    if ffmpeg_return_code != 0:
+      print("Error occurred when calling ffmpeg:")
+      print("---------------------------------------------------------------")
+
+      for error_line in stderr_lines:
+        print(f"!!!    {error_line}")
+      
+      print("---------------------------------------------------------------")
+      exit(1)
+
+    json_string = ""
+    in_loudnorm_results = False
+
+    for stderr_line in stderr_lines:
+      stripped_line = stderr_line.rstrip("\n")
+
+      if in_loudnorm_results == False:
+        if stripped_line.startswith("[Parsed_loudnorm"):
+          in_loudnorm_results = True
+          continue
+      else:
+        json_string += stripped_line
+
+        if stripped_line.startswith("}"):
+          break
+
+    normalize_pass1_results = json.loads(json_string)
+    print(f"[{pad_string(output_file_name)}] Normalize 1st pass done")
+    return f"-filter:a loudnorm=linear=true:I={NORMALIZE_TARGET_LOUDNESS}:TP={NORMALIZE_MAX_TRUE_PEAK}:measured_I={normalize_pass1_results['input_i']}:measured_LRA={normalize_pass1_results['input_lra']}:measured_tp={normalize_pass1_results['input_tp']}:measured_thresh={normalize_pass1_results['input_thresh']}:print_format=summary"
+
+def parse_ffmpeg_status(verb, output_file_name, stripped_line, total_duration_ms, current_progress, nosize=False):
+  # bitrate=97974.8kbits/s
+  # total_size=1335825803
+  # out_time_us=109075000
+  # out_time_ms=109075000
+  # out_time=00:01:49.075000
+  # dup_frames=0
+  # drop_frames=0
+  # speed=59.9x
+  # progress=continue/end
+
+  if not stripped_line.endswith("N/A"):
+    if (stripped_line.startswith("total_size=")):
+      current_progress["size"] = int(stripped_line.split('=')[1])
+
+    if (stripped_line.startswith("out_time_ms=")) and not stripped_line.startswith("out_time_ms=N/A"):
+      current_time = int(stripped_line.split('=')[1])
+      current_progress["time_ms"] = current_time
+      current_progress["percentage"] = round(float(current_time / total_duration_ms) * 100.0, 1)
+
+    if (stripped_line.startswith("speed=")):
+      current_progress["speed"] = float(stripped_line.split('=')[1].rstrip('x'))
+
+    if (stripped_line.startswith("progress=")):
+      process_end = stripped_line == "progress=end"
+      if process_end == True:
+        current_progress["percentage"] = 100
+
+      # our progress is updated, print the progress
+      print_progress(verb, output_file_name, current_progress, process_end, nosize)
+      return True
+
+
+def ffprobe_file(source_file):
+  ffprobe_command = f"ffprobe -v quiet -print_format json -show_format -show_streams '{source_file}'"
+  ffprobe_response = subprocess.run(ffprobe_command, capture_output=True, encoding='UTF-8', shell=True)
+  ffprobe_results = json.loads(ffprobe_response.stdout)
+
+  return ffprobe_results
+
+
+def enqueue_output(out, queue, process):
+    for line in iter(out.readline, b''):
+        
+        # if len(line) == 0 and process.poll() != None:
+        #   print("no more lines, aborting")
+        #   break
+
+        queue.put(line)
+    out.close()
+
+
+def sizeof_fmt(num, suffix="B"):
+    for unit in ("", "Ki", "Mi", "Gi", "Ti", "Pi", "Ei", "Zi"):
+        if abs(num) < 1024.0:
+            return f"{num:3.1f}{unit}{suffix}"
+        
+        num /= 1024.0
+
+    return f"{num:.2f}Yi{suffix}"
+
+
+def load_config():
+  with open(os.path.join(SCRIPT_DIR,"ffpreset.yaml")) as file:
+    return yaml.safe_load(file)
+
+
+def pad_string(name):
+  return str("{:" + str(FILE_NAME_WIDTH + WIDTH_PAD) + "}").format(name)
+
+
+def list_presets():
+  print("Presets:")
+  print("")
+  print("Preset                         Description")
+  print("------------------------------------------------------------------------------------------------------------------------")
+
+  config = load_config()
+  presets = config["presets"]
+
+  for preset in presets.keys():
+    print('{:<30} {}'.format(preset, config["presets"][preset]["description"]))
+
+if __name__ == "__main__":
+  main()
